@@ -161,8 +161,6 @@ public class FlippingPlugin extends Plugin
 	//updates the cache by monitoring the directory and loading a file's contents into the cache if it has been changed
 	private CacheUpdater cacheUpdater;
 
-	@Setter
-	private List<TradeActivityTimer> slotTimers = new ArrayList<>();
 	private ScheduledFuture slotTimersTask;
 	private Instant startUpTime = Instant.now();
 
@@ -204,8 +202,6 @@ public class FlippingPlugin extends Plugin
 			cacheUpdater = new CacheUpdater();
 			cacheUpdater.registerCallback(this::onDirectoryUpdate);
 			cacheUpdater.start();
-
-			slotTimers = setupSlotTimers();
 
 			generalRepeatingTasks = setupRepeatingTasks(1000);
 
@@ -322,7 +318,9 @@ public class FlippingPlugin extends Plugin
 		if (!accountCache.containsKey(displayName))
 		{
 			log.info("cache does not contain data for {}", displayName);
-			accountCache.put(displayName, new AccountData());
+			AccountData accountData = new AccountData();
+			accountData.setSlotTimers(setupSlotTimers());
+			accountCache.put(displayName, accountData);
 			masterPanel.getAccountSelector().addItem(displayName);
 		}
 
@@ -345,7 +343,7 @@ public class FlippingPlugin extends Plugin
 		if (slotTimersTask == null && config.slotTimersEnabled())
 		{
 			log.info("starting slot timers on login");
-			slotTimersTask = executor.scheduleAtFixedRate(() -> slotTimers.forEach(timer -> clientThread.invokeLater(() -> timer.updateTimer())), 1000, 1000, TimeUnit.MILLISECONDS);
+			slotTimersTask = executor.scheduleAtFixedRate(() -> accountCache.get(currentlyLoggedInAccount).getSlotTimers().forEach(timer -> clientThread.invokeLater(() -> timer.updateTimer())), 1000, 1000, TimeUnit.MILLISECONDS);
 		}
 	}
 
@@ -377,7 +375,18 @@ public class FlippingPlugin extends Plugin
 			log.info("initiating load on startup");
 			TradePersister.setup();
 			Map<String, AccountData> accountsData = loadAllTrades();
-			accountsData.values().forEach(AccountData::startNewSession);
+			for (AccountData accountData:accountsData.values()) {
+				accountData.startNewSession();
+				if (accountData.getSlotTimers() == null) {
+					accountData.setSlotTimers(setupSlotTimers());
+				}
+				else {
+					accountData.getSlotTimers().forEach(timer -> {
+						timer.setClient(client);
+						timer.setPlugin(this);
+					});
+				}
+			}
 			return accountsData;
 		}
 
@@ -553,7 +562,7 @@ public class FlippingPlugin extends Plugin
 
 		if (newOfferEvent.isStartOfOffer() && !isDuplicateStartOfOfferEvent(newOfferEvent))
 		{
-			slotTimers.get(newOfferEvent.getSlot()).setCurrentOffer(newOfferEvent);
+			accountCache.get(currentlyLoggedInAccount).getSlotTimers().get(newOfferEvent.getSlot()).setCurrentOffer(newOfferEvent);
 			lastOfferEventForEachSlot.put(newOfferEvent.getSlot(), newOfferEvent); //tickSinceFirstOffer is 0 here
 			return Optional.empty();
 		}
@@ -566,7 +575,7 @@ public class FlippingPlugin extends Plugin
 		if (newOfferEvent.getCurrentQuantityInTrade() == 0 && newOfferEvent.isComplete())
 		{
 			lastOfferEventForEachSlot.remove(newOfferEvent.getSlot());
-			slotTimers.get(newOfferEvent.getSlot()).setCurrentOffer(newOfferEvent);
+			accountCache.get(currentlyLoggedInAccount).getSlotTimers().get(newOfferEvent.getSlot()).setCurrentOffer(newOfferEvent);
 			return Optional.empty();
 		}
 
@@ -592,7 +601,7 @@ public class FlippingPlugin extends Plugin
 
 		newOfferEvent.setTicksSinceFirstOffer(lastOfferEvent);
 		lastOfferEventForEachSlot.put(newOfferEvent.getSlot(), newOfferEvent);
-		slotTimers.get(newOfferEvent.getSlot()).setCurrentOffer(newOfferEvent);
+		accountCache.get(currentlyLoggedInAccount).getSlotTimers().get(newOfferEvent.getSlot()).setCurrentOffer(newOfferEvent);
 		return Optional.of(newOfferEvent);
 	}
 
@@ -1009,7 +1018,7 @@ public class FlippingPlugin extends Plugin
 	{
 		for (int slotIndex = 0; slotIndex < 8; slotIndex++)
 		{
-			TradeActivityTimer timer = slotTimers.get(slotIndex);
+			TradeActivityTimer timer = accountCache.get(currentlyLoggedInAccount).getSlotTimers().get(slotIndex);
 
 			//Get the offer slots from the window container
 			//We add one to the index, as the first widget is the text above the offer slots
@@ -1132,12 +1141,12 @@ public class FlippingPlugin extends Plugin
 				if (config.slotTimersEnabled())
 				{
 
-					slotTimersTask = executor.scheduleAtFixedRate(() -> slotTimers.forEach(timer -> clientThread.invokeLater(() -> timer.updateTimer())), 1000, 1000, TimeUnit.MILLISECONDS);
+					slotTimersTask = executor.scheduleAtFixedRate(() -> accountCache.get(currentlyLoggedInAccount).getSlotTimers().forEach(timer -> clientThread.invokeLater(() -> timer.updateTimer())), 1000, 1000, TimeUnit.MILLISECONDS);
 				}
 				else
 				{
 					slotTimersTask.cancel(true);
-					slotTimers.forEach(TradeActivityTimer::resetToDefault);
+					accountCache.get(currentlyLoggedInAccount).getSlotTimers().forEach(TradeActivityTimer::resetToDefault);
 				}
 			}
 
